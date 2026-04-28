@@ -6,6 +6,7 @@ REMOTE_DIR="${REMOTE_DIR:-/home/rcj/RCJzhaocycle}"
 PORT="${PORT:-8080}"
 CAMERA="${CAMERA:-0}"
 REMAP="${REMAP:-config/remap.xml}"
+MASK="${MASK:-config/robot_mask.png}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -15,6 +16,7 @@ rsync -av --delete \
   --exclude .git \
   --exclude build \
   --exclude out \
+  --exclude pic_web \
   --exclude params \
   --exclude remote_params \
   --exclude '*.log' \
@@ -31,7 +33,13 @@ else
   remap_args="--no-remap"
   echo "warning: ${REMAP} not found; starting without remap"
 fi
-ssh "${HOST}" "cd '${REMOTE_DIR}' && { nohup env LD_PRELOAD=/usr/local/libexec/libcamera/v4l2-compat.so ./build/arc_web_tuner --camera '${CAMERA}' --bind 0.0.0.0 --port '${PORT}' --params-dir params ${remap_args} > arc_web_tuner.log 2>&1 < /dev/null & echo \$! > arc_web_tuner.pid; }"
+if [[ -f "${MASK}" ]]; then
+  mask_args="--mask '${MASK}'"
+else
+  mask_args="--no-mask"
+  echo "warning: ${MASK} not found; starting without robot mask"
+fi
+ssh "${HOST}" "cd '${REMOTE_DIR}' && { nohup env LD_PRELOAD=/usr/local/libexec/libcamera/v4l2-compat.so ./build/arc_web_tuner --camera '${CAMERA}' --bind 0.0.0.0 --port '${PORT}' --params-dir params ${remap_args} ${mask_args} > arc_web_tuner.log 2>&1 < /dev/null & echo \$! > arc_web_tuner.pid; }"
 
 host_ip="${HOST#*@}"
 echo "arc_web_tuner started on ${HOST}"

@@ -106,6 +106,12 @@ params/arc_params_YYYYMMDD_HHMM.json
 params/arc_params_history.csv
 ```
 
+网页中按 `s`，或点击 `Snapshot`，会把当前摄像头画面保存到树莓派：
+
+```text
+/home/rcj/RCJzhaocycle/pic_web/
+```
+
 文件名中的时间戳精确到分钟。调参结束后，把树莓派上的参数文档拉回本机：
 
 ```bash
@@ -128,6 +134,26 @@ PORT=8090 CAMERA=0 ./scripts/start_remote_web_tuner.sh rcj@10.32.0.172
 
 ```bash
 ssh rcj@10.32.0.172 'pkill -x arc_web_tuner'
+```
+
+## 正样本标注工具
+
+打开本地 HTML 工具：
+
+```text
+tools/positive_labeler.html
+```
+
+点击 `Open Folder` 选择 `testset/positive/`，或点击 `Open Images` 选择多张正样本图片。每张图点击圆心并拖出半径，完成后点击 `Export CSV`，会生成：
+
+```text
+labels.csv
+```
+
+CSV 字段和离线测试约定一致：
+
+```text
+filename,expected_found,center_x,center_y,radius,tolerance_px,notes
 ```
 
 ## Python 离线参考

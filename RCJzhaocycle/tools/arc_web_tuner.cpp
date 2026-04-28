@@ -40,6 +40,7 @@ struct TuneState {
     int max_width = 400;
     int max_height = 300;
     int use_hough = 0;
+    int use_mask = 0;
     int min_radius = 45;
     int max_radius = 430;
     int ring_band = 10;
@@ -55,12 +56,16 @@ struct TuneState {
 struct SharedState {
     std::mutex mutex;
     TuneState tune;
+    cv::Mat latest_frame;
     std::vector<unsigned char> preview_jpeg;
     std::vector<unsigned char> binary_jpeg;
     std::string status_json = "{}";
     fs::path params_dir = "params";
+    fs::path snapshot_dir = "pic_web";
     bool remap_enabled = false;
     std::string remap_path;
+    bool mask_enabled = false;
+    std::string mask_path;
     std::atomic<bool> running{true};
 };
 
@@ -110,6 +115,17 @@ std::string fileMinute() {
     return out.str();
 }
 
+std::string fileTimestamp() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y%m%d_%H%M%S_") << std::setw(3) << std::setfill('0') << millis;
+    return out.str();
+}
+
 std::string paramsJson(const TuneState& state, const std::string& timestamp) {
     std::ostringstream out;
     out << "{\n"
@@ -118,6 +134,7 @@ std::string paramsJson(const TuneState& state, const std::string& timestamp) {
         << "  \"max_width\": " << state.max_width << ",\n"
         << "  \"max_height\": " << state.max_height << ",\n"
         << "  \"use_hough\": " << state.use_hough << ",\n"
+        << "  \"use_mask\": " << state.use_mask << ",\n"
         << "  \"min_radius\": " << state.min_radius << ",\n"
         << "  \"max_radius\": " << state.max_radius << ",\n"
         << "  \"ring_band\": " << state.ring_band << ",\n"
@@ -150,7 +167,7 @@ void saveParams(const TuneState& state, const fs::path& params_dir) {
     const bool needs_header = !fs::exists(history_path);
     std::ofstream history(history_path, std::ios::app);
     if (needs_header) {
-        history << "timestamp_minute,scale_percent,max_width,max_height,use_hough,min_radius,max_radius,"
+        history << "timestamp_minute,scale_percent,max_width,max_height,use_hough,use_mask,min_radius,max_radius,"
                 << "ring_band,min_arc_bins,dark_value_max,dark_offset,min_confidence,green_hue_min,"
                 << "green_hue_max,green_sat_min\n";
     }
@@ -159,6 +176,7 @@ void saveParams(const TuneState& state, const fs::path& params_dir) {
             << state.max_width << ','
             << state.max_height << ','
             << state.use_hough << ','
+            << state.use_mask << ','
             << state.min_radius << ','
             << state.max_radius << ','
             << state.ring_band << ','
@@ -204,6 +222,7 @@ void updateTuneFromJson(const std::string& body, TuneState& tune) {
     parseIntField(body, "max_width", tune.max_width);
     parseIntField(body, "max_height", tune.max_height);
     parseIntField(body, "use_hough", tune.use_hough);
+    parseIntField(body, "use_mask", tune.use_mask);
     parseIntField(body, "min_radius", tune.min_radius);
     parseIntField(body, "max_radius", tune.max_radius);
     parseIntField(body, "ring_band", tune.ring_band);
@@ -261,7 +280,14 @@ std::string jsonString(const std::string& value) {
     return out.str();
 }
 
-std::string statusJson(const rcj::ArcDetection& result, double ms, double fps, bool remap_enabled, const std::string& remap_path) {
+std::string statusJson(
+    const rcj::ArcDetection& result,
+    double ms,
+    double fps,
+    bool remap_enabled,
+    const std::string& remap_path,
+    bool mask_enabled,
+    const std::string& mask_path) {
     std::ostringstream out;
     out << "{"
         << "\"found\":" << (result.found ? "true" : "false") << ','
@@ -274,9 +300,68 @@ std::string statusJson(const rcj::ArcDetection& result, double ms, double fps, b
         << "\"ms\":" << ms << ','
         << "\"fps\":" << fps << ','
         << "\"remap_enabled\":" << (remap_enabled ? "true" : "false") << ','
-        << "\"remap_path\":\"" << jsonString(remap_path) << "\""
+        << "\"remap_path\":\"" << jsonString(remap_path) << "\","
+        << "\"mask_enabled\":" << (mask_enabled ? "true" : "false") << ','
+        << "\"mask_path\":\"" << jsonString(mask_path) << "\""
         << "}";
     return out.str();
+}
+
+std::string saveSnapshot(SharedState& state, std::string& error) {
+    cv::Mat frame;
+    fs::path snapshot_dir;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if (state.latest_frame.empty()) {
+            error = "no camera frame is available yet";
+            return {};
+        }
+        frame = state.latest_frame.clone();
+        snapshot_dir = state.snapshot_dir;
+    }
+
+    std::error_code ec;
+    fs::create_directories(snapshot_dir, ec);
+    if (ec) {
+        error = "failed to create snapshot directory: " + snapshot_dir.string();
+        return {};
+    }
+
+    const fs::path path = snapshot_dir / ("web_" + fileTimestamp() + ".png");
+    if (!cv::imwrite(path.string(), frame)) {
+        error = "failed to write snapshot: " + path.string();
+        return {};
+    }
+    return path.string();
+}
+
+bool loadKeepMask(const fs::path& path, cv::Mat& keep_mask, std::string& error) {
+    cv::Mat loaded = cv::imread(path.string(), cv::IMREAD_GRAYSCALE);
+    if (loaded.empty()) {
+        error = "failed to read mask: " + path.string();
+        return false;
+    }
+    cv::threshold(loaded, keep_mask, 127, 255, cv::THRESH_BINARY);
+    return true;
+}
+
+bool applyKeepMask(cv::Mat& image, const cv::Mat& keep_mask, std::string& error) {
+    if (keep_mask.empty()) {
+        return true;
+    }
+    if (image.size() != keep_mask.size()) {
+        std::ostringstream message;
+        message << "mask size " << keep_mask.cols << 'x' << keep_mask.rows
+                << " does not match frame size " << image.cols << 'x' << image.rows;
+        error = message.str();
+        return false;
+    }
+    if (image.channels() == 1) {
+        image.setTo(cv::Scalar(180), keep_mask == 0);
+    } else {
+        image.setTo(cv::Scalar(0, 180, 0), keep_mask == 0);
+    }
+    return true;
 }
 
 bool sendAll(int fd, const char* data, std::size_t size) {
@@ -322,6 +407,7 @@ std::string htmlPage() {
     input[type=range] { width: 100%; }
     code { color: #9ee; }
     button { width: 100%; padding: 9px; margin-top: 10px; }
+    .hint { color: #bbb; font-size: 13px; line-height: 1.35; }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -336,13 +422,16 @@ std::string htmlPage() {
     <div id="status">loading</div>
     <div id="controls"></div>
     <button onclick="saveNow()">Save now</button>
+    <button onclick="snapshotNow()">Snapshot</button>
+    <p class="hint">Press <code>s</code> to save the current corrected camera frame to <code>pic_web/</code>.</p>
+    <div id="snapshotStatus" class="hint"></div>
     <p>Auto-save writes <code>params/latest_params.json</code>, minute JSON, and history CSV.</p>
   </aside>
 </main>
 <script>
 const spec = [
   ["scale_percent", 10, 100, 1], ["max_width", 64, 800, 1], ["max_height", 48, 600, 1],
-  ["use_hough", 0, 1, 1], ["min_radius", 1, 800, 1], ["max_radius", 2, 900, 1],
+  ["use_hough", 0, 1, 1], ["use_mask", 0, 1, 1], ["min_radius", 1, 800, 1], ["max_radius", 2, 900, 1],
   ["ring_band", 1, 80, 1], ["min_arc_bins", 1, 72, 1], ["dark_value_max", 1, 255, 1],
   ["dark_offset", -80, 160, 1], ["min_confidence", 0, 100, 1],
   ["green_hue_min", 0, 179, 1], ["green_hue_max", 0, 179, 1], ["green_sat_min", 0, 255, 1]
@@ -375,6 +464,16 @@ async function saveNow() {
   await postParams();
   await fetch("/api/save-now", {method:"POST"});
 }
+async function snapshotNow() {
+  const status = document.getElementById("snapshotStatus");
+  try {
+    const response = await fetch("/api/snapshot", {method:"POST"});
+    const result = await response.json();
+    status.textContent = result.saved ? `saved ${result.path}` : `snapshot failed: ${result.error}`;
+  } catch (e) {
+    status.textContent = "snapshot failed";
+  }
+}
 async function loadParams() {
   params = await (await fetch("/api/params")).json();
   renderControls();
@@ -383,11 +482,18 @@ async function pollStatus() {
   try {
     const s = await (await fetch("/api/status")).json();
     document.getElementById("status").textContent =
-      `${s.found ? "FOUND" : "MISS"} ms=${s.ms.toFixed(2)} fps=${s.fps.toFixed(1)} conf=${s.confidence.toFixed(3)} radius=${s.radius.toFixed(1)} remap=${s.remap_enabled ? "on" : "off"}`;
+      `${s.found ? "FOUND" : "MISS"} ms=${s.ms.toFixed(2)} fps=${s.fps.toFixed(1)} conf=${s.confidence.toFixed(3)} radius=${s.radius.toFixed(1)} remap=${s.remap_enabled ? "on" : "off"} mask=${s.mask_enabled ? "on" : "off"}`;
   } catch (e) {}
 }
 loadParams();
 setInterval(pollStatus, 500);
+window.addEventListener("keydown", e => {
+  if (e.target && ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
+  if (e.key === "s" || e.key === "S") {
+    e.preventDefault();
+    snapshotNow();
+  }
+});
 </script>
 </body>
 </html>)HTML";
@@ -500,13 +606,21 @@ void handleClient(int fd, SharedState& state) {
         }
         saveParams(saved, params_dir);
         sendResponse(fd, "application/json", "{\"saved\":true}\n");
+    } else if (method == "POST" && path == "/api/snapshot") {
+        std::string error;
+        const std::string saved_path = saveSnapshot(state, error);
+        if (saved_path.empty()) {
+            sendResponse(fd, "application/json", "{\"saved\":false,\"error\":\"" + jsonString(error) + "\"}\n", 500, "Internal Server Error");
+        } else {
+            sendResponse(fd, "application/json", "{\"saved\":true,\"path\":\"" + jsonString(saved_path) + "\"}\n");
+        }
     } else {
         sendResponse(fd, "text/plain", "not found\n", 404, "Not Found");
     }
     close(fd);
 }
 
-void captureLoop(SharedState& state, int camera_index, const rcj::FrameRemapper& remapper) {
+void captureLoop(SharedState& state, int camera_index, const rcj::FrameRemapper& remapper, const cv::Mat& keep_mask) {
     cv::VideoCapture cap(camera_index);
     if (!cap.isOpened()) {
         std::cerr << "failed to open camera " << camera_index << "\n";
@@ -543,9 +657,22 @@ void captureLoop(SharedState& state, int camera_index, const rcj::FrameRemapper&
             std::lock_guard<std::mutex> lock(state.mutex);
             tune = state.tune;
         }
+
+        const bool use_mask = tune.use_mask != 0 && !keep_mask.empty();
+        cv::Mat detection_frame = frame.clone();
+        if (use_mask) {
+            std::string error;
+            if (!applyKeepMask(detection_frame, keep_mask, error)) {
+                std::cerr << error << "\n";
+                state.running = false;
+                g_running = false;
+                break;
+            }
+        }
+
         rcj::ArcDetector detector(makeConfig(tune));
         const auto start = std::chrono::steady_clock::now();
-        rcj::ArcDetection result = detector.detect(frame);
+        rcj::ArcDetection result = detector.detect(detection_frame);
         const auto end = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(end - start).count();
         const double fps = 1000.0 / std::max(1.0, std::chrono::duration<double, std::milli>(end - last).count());
@@ -564,9 +691,10 @@ void captureLoop(SharedState& state, int camera_index, const rcj::FrameRemapper&
 
         {
             std::lock_guard<std::mutex> lock(state.mutex);
+            state.latest_frame = frame.clone();
             state.preview_jpeg = std::move(preview);
             state.binary_jpeg = std::move(binary);
-            state.status_json = statusJson(result, ms, fps, state.remap_enabled, state.remap_path);
+            state.status_json = statusJson(result, ms, fps, state.remap_enabled, state.remap_path, use_mask, state.mask_path);
         }
     }
 }
@@ -598,7 +726,7 @@ int makeServerSocket(const std::string& bind_host, int port) {
 }
 
 void printUsage(const char* argv0) {
-    std::cerr << "usage: " << argv0 << " [--camera 0] [--bind 0.0.0.0] [--port 8080] [--params-dir params] [--remap config/remap.xml | --no-remap]\n";
+    std::cerr << "usage: " << argv0 << " [--camera 0] [--bind 0.0.0.0] [--port 8080] [--params-dir params] [--snapshot-dir pic_web] [--mask config/robot_mask.png | --no-mask] [--remap config/remap.xml | --no-remap]\n";
 }
 
 }  // namespace
@@ -608,8 +736,11 @@ int main(int argc, char** argv) {
     std::string bind_host = "0.0.0.0";
     int port = 8080;
     fs::path params_dir = "params";
+    fs::path snapshot_dir = "pic_web";
     bool remap_enabled = false;
     std::string remap_path;
+    bool mask_enabled = false;
+    fs::path mask_path;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -621,6 +752,14 @@ int main(int argc, char** argv) {
             port = std::stoi(argv[++i]);
         } else if (arg == "--params-dir" && i + 1 < argc) {
             params_dir = argv[++i];
+        } else if (arg == "--snapshot-dir" && i + 1 < argc) {
+            snapshot_dir = argv[++i];
+        } else if (arg == "--mask" && i + 1 < argc) {
+            mask_enabled = true;
+            mask_path = argv[++i];
+        } else if (arg == "--no-mask") {
+            mask_enabled = false;
+            mask_path.clear();
         } else if (arg == "--remap" && i + 1 < argc) {
             remap_enabled = true;
             remap_path = argv[++i];
@@ -642,8 +781,11 @@ int main(int argc, char** argv) {
 
     SharedState state;
     state.params_dir = params_dir;
+    state.snapshot_dir = snapshot_dir;
     state.remap_enabled = remap_enabled;
     state.remap_path = remap_path;
+    state.mask_enabled = mask_enabled;
+    state.mask_path = mask_path.string();
     rcj::FrameRemapper remapper;
     if (remap_enabled) {
         std::string error;
@@ -653,9 +795,18 @@ int main(int argc, char** argv) {
         }
         std::cout << "remap enabled: " << remapper.path() << " size=" << remapper.mapSize().width << 'x' << remapper.mapSize().height << "\n";
     }
+    cv::Mat keep_mask;
+    if (mask_enabled) {
+        std::string error;
+        if (!loadKeepMask(mask_path, keep_mask, error)) {
+            std::cerr << error << "\n";
+            return 1;
+        }
+        std::cout << "mask enabled: " << mask_path << " size=" << keep_mask.cols << 'x' << keep_mask.rows << "\n";
+    }
     saveParams(state.tune, state.params_dir);
 
-    std::thread capture_thread(captureLoop, std::ref(state), camera, std::cref(remapper));
+    std::thread capture_thread(captureLoop, std::ref(state), camera, std::cref(remapper), std::cref(keep_mask));
     const int server_fd = makeServerSocket(bind_host, port);
     if (server_fd < 0) {
         std::cerr << "failed to bind " << bind_host << ':' << port << "\n";

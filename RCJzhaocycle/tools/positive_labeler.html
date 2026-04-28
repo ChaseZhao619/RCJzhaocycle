@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Positive Circle Labeler</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --line: #d9dde5;
+      --text: #19202a;
+      --muted: #637083;
+      --accent: #1d7a70;
+      --accent-2: #c43d32;
+      --canvas: #111318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: 56px 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 18px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 230px;
+      white-space: nowrap;
+    }
+
+    .brand strong {
+      font-size: 16px;
+      font-weight: 650;
+    }
+
+    .brand span,
+    .status {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .file-button,
+    button {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      padding: 0 11px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .file-button:hover,
+    button:hover {
+      border-color: #aeb7c6;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button.danger {
+      border-color: #e4b1ac;
+      color: var(--accent-2);
+    }
+
+    button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .main {
+      display: grid;
+      grid-template-columns: minmax(190px, 250px) minmax(0, 1fr) 270px;
+      min-height: 0;
+    }
+
+    .sidebar,
+    .inspector {
+      min-height: 0;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .inspector {
+      border-right: 0;
+      border-left: 1px solid var(--line);
+    }
+
+    .pane-title {
+      height: 42px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .file-list {
+      overflow: auto;
+      padding: 6px;
+    }
+
+    .file-item {
+      width: 100%;
+      min-height: 34px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .file-item:hover {
+      background: #eef2f6;
+    }
+
+    .file-item.active {
+      background: #dfeeea;
+    }
+
+    .file-item .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      border: 1px solid #9aa5b5;
+    }
+
+    .file-item.done .dot {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .file-item span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .stage {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 1fr 42px;
+      background: var(--canvas);
+    }
+
+    .canvas-wrap {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+
+    .empty {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #c1c8d4;
+      text-align: center;
+      padding: 24px;
+    }
+
+    .filmstrip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      color: #d8dde6;
+      border-top: 1px solid #2a2f38;
+      background: #171b22;
+    }
+
+    .filmstrip button {
+      height: 28px;
+      background: #222833;
+      border-color: #3a4351;
+      color: #eef2f6;
+    }
+
+    .fields {
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+      overflow: auto;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .field input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 9px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .field input:focus {
+      outline: 2px solid rgba(29, 122, 112, 0.22);
+      border-color: var(--accent);
+    }
+
+    .inline {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .main {
+        grid-template-columns: 180px minmax(0, 1fr);
+      }
+
+      .inspector {
+        grid-column: 1 / -1;
+        min-height: 220px;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 720px) {
+      .app {
+        grid-template-rows: auto 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 10px 12px;
+      }
+
+      .main {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        max-height: 170px;
+      }
+
+      .stage {
+        min-height: 55vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <strong>Positive Circle Labeler</strong>
+        <span id="progress">0 / 0 labeled</span>
+      </div>
+      <div class="actions">
+        <label class="file-button" title="Load positive images">
+          Open Images
+          <input id="fileInput" type="file" accept="image/*" multiple>
+        </label>
+        <label class="file-button" title="Load a positive/ folder">
+          Open Folder
+          <input id="folderInput" type="file" accept="image/*" multiple webkitdirectory>
+        </label>
+        <button id="importBtn" title="Import an existing labels.csv">Import CSV</button>
+        <input id="csvInput" type="file" accept=".csv,text/csv">
+        <button id="clearBtn" class="danger" title="Clear the current image label">Clear</button>
+        <button id="exportBtn" class="primary" title="Export labels.csv">Export CSV</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <aside class="sidebar">
+        <div class="pane-title">
+          <span>Images</span>
+          <span id="imageCount">0</span>
+        </div>
+        <div id="fileList" class="file-list"></div>
+      </aside>
+
+      <section class="stage">
+        <div class="canvas-wrap">
+          <canvas id="canvas"></canvas>
+          <div id="empty" class="empty">Load positive images to begin labeling.</div>
+        </div>
+        <div class="filmstrip">
+          <button id="prevBtn">Prev</button>
+          <span id="currentName">No image loaded</span>
+          <button id="nextBtn">Next</button>
+        </div>
+      </section>
+
+      <aside class="inspector">
+        <div class="pane-title">Label</div>
+        <div class="fields">
+          <div class="inline">
+            <div class="field">
+              <label for="centerX">center_x</label>
+              <input id="centerX" type="number" step="0.1">
+            </div>
+            <div class="field">
+              <label for="centerY">center_y</label>
+              <input id="centerY" type="number" step="0.1">
+            </div>
+          </div>
+          <div class="inline">
+            <div class="field">
+              <label for="radius">radius</label>
+              <input id="radius" type="number" step="0.1">
+            </div>
+            <div class="field">
+              <label for="tolerance">tolerance_px</label>
+              <input id="tolerance" type="number" step="1" value="25">
+            </div>
+          </div>
+          <div class="field">
+            <label for="notes">notes</label>
+            <input id="notes" type="text" placeholder="optional">
+          </div>
+          <div class="hint">
+            Click the center, drag outward for radius. Drag the center point to move it; drag the circle edge to resize it. Shift-drag moves the center, including outside the image.
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      images: [],
+      index: -1,
+      dragMode: null,
+      loadedImage: null,
+      view: { scale: 1, x: 0, y: 0, w: 0, h: 0 }
+    };
+
+    const elements = {
+      canvas: document.getElementById("canvas"),
+      empty: document.getElementById("empty"),
+      fileInput: document.getElementById("fileInput"),
+      folderInput: document.getElementById("folderInput"),
+      csvInput: document.getElementById("csvInput"),
+      importBtn: document.getElementById("importBtn"),
+      clearBtn: document.getElementById("clearBtn"),
+      exportBtn: document.getElementById("exportBtn"),
+      prevBtn: document.getElementById("prevBtn"),
+      nextBtn: document.getElementById("nextBtn"),
+      fileList: document.getElementById("fileList"),
+      currentName: document.getElementById("currentName"),
+      imageCount: document.getElementById("imageCount"),
+      progress: document.getElementById("progress"),
+      centerX: document.getElementById("centerX"),
+      centerY: document.getElementById("centerY"),
+      radius: document.getElementById("radius"),
+      tolerance: document.getElementById("tolerance"),
+      notes: document.getElementById("notes")
+    };
+
+    const ctx = elements.canvas.getContext("2d");
+
+    function imagePath(file) {
+      return file.webkitRelativePath || file.name;
+    }
+
+    function normalizedPath(path) {
+      const parts = path.split(/[\\/]+/).filter(Boolean);
+      const positivesIndex = parts.lastIndexOf("positives");
+      if (positivesIndex >= 0) {
+        return parts.slice(positivesIndex).join("/");
+      }
+      const positiveIndex = parts.lastIndexOf("positive");
+      if (positiveIndex >= 0) {
+        return parts.slice(positiveIndex).join("/");
+      }
+      return "positives/" + parts[parts.length - 1];
+    }
+
+    function labelForCurrent() {
+      if (state.index < 0) return null;
+      return state.images[state.index].label;
+    }
+
+    function hasLabel(item) {
+      const label = item.label;
+      return Number.isFinite(label.center_x) && Number.isFinite(label.center_y) && Number.isFinite(label.radius) && label.radius > 0;
+    }
+
+    function setImages(files) {
+      const images = Array.from(files)
+        .filter(file => file.type.startsWith("image/"))
+        .sort((a, b) => imagePath(a).localeCompare(imagePath(b), undefined, { numeric: true }))
+        .map(file => ({
+          file,
+          path: normalizedPath(imagePath(file)),
+          url: URL.createObjectURL(file),
+          label: {
+            expected_found: 1,
+            center_x: NaN,
+            center_y: NaN,
+            radius: NaN,
+            tolerance_px: 25,
+            notes: ""
+          }
+        }));
+
+      for (const item of state.images) URL.revokeObjectURL(item.url);
+      state.images = images;
+      state.index = images.length ? 0 : -1;
+      loadCurrentImage();
+      renderFileList();
+      updateUi();
+    }
+
+    function loadCurrentImage() {
+      state.loadedImage = null;
+      if (state.index < 0) {
+        draw();
+        return;
+      }
+      const item = state.images[state.index];
+      const img = new Image();
+      img.onload = () => {
+        state.loadedImage = img;
+        fitCanvas();
+        draw();
+      };
+      img.src = item.url;
+    }
+
+    function fitCanvas() {
+      const canvas = elements.canvas;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * dpr));
+      const height = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    }
+
+    function computeView() {
+      const img = state.loadedImage;
+      if (!img) return;
+      const cw = elements.canvas.width;
+      const ch = elements.canvas.height;
+      const margin = Math.min(cw, ch) * 0.08;
+      const availableWidth = Math.max(1, cw - margin * 2);
+      const availableHeight = Math.max(1, ch - margin * 2);
+      const scale = Math.min(availableWidth / img.naturalWidth, availableHeight / img.naturalHeight);
+      const w = img.naturalWidth * scale;
+      const h = img.naturalHeight * scale;
+      state.view = {
+        scale,
+        x: (cw - w) / 2,
+        y: (ch - h) / 2,
+        w,
+        h
+      };
+    }
+
+    function imageToCanvas(point) {
+      return {
+        x: state.view.x + point.x * state.view.scale,
+        y: state.view.y + point.y * state.view.scale
+      };
+    }
+
+    function canvasToImage(event) {
+      const rect = elements.canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const x = (event.clientX - rect.left) * dpr;
+      const y = (event.clientY - rect.top) * dpr;
+      return {
+        x: (x - state.view.x) / state.view.scale,
+        y: (y - state.view.y) / state.view.scale
+      };
+    }
+
+    function draw() {
+      fitCanvas();
+      const cw = elements.canvas.width;
+      const ch = elements.canvas.height;
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.fillStyle = "#111318";
+      ctx.fillRect(0, 0, cw, ch);
+
+      const img = state.loadedImage;
+      if (!img) {
+        elements.empty.style.display = "grid";
+        return;
+      }
+      elements.empty.style.display = "none";
+      computeView();
+      ctx.save();
+      ctx.strokeStyle = "#3a4351";
+      ctx.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+      ctx.strokeRect(state.view.x, state.view.y, state.view.w, state.view.h);
+      ctx.restore();
+      ctx.drawImage(img, state.view.x, state.view.y, state.view.w, state.view.h);
+
+      const label = labelForCurrent();
+      if (!label || !hasLabel({ label })) return;
+
+      const center = imageToCanvas({ x: label.center_x, y: label.center_y });
+      const r = label.radius * state.view.scale;
+      ctx.save();
+      ctx.lineWidth = Math.max(2, 2 * (window.devicePixelRatio || 1));
+      ctx.strokeStyle = "#ffdd57";
+      ctx.fillStyle = "#ffdd57";
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, Math.max(4, 4 * (window.devicePixelRatio || 1)), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1d7a70";
+      ctx.beginPath();
+      ctx.moveTo(center.x - 10, center.y);
+      ctx.lineTo(center.x + 10, center.y);
+      ctx.moveTo(center.x, center.y - 10);
+      ctx.lineTo(center.x, center.y + 10);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function renderFileList() {
+      elements.fileList.innerHTML = "";
+      state.images.forEach((item, idx) => {
+        const row = document.createElement("div");
+        row.className = "file-item" + (idx === state.index ? " active" : "") + (hasLabel(item) ? " done" : "");
+        row.innerHTML = `<span class="dot"></span><span title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</span>`;
+        row.addEventListener("click", () => {
+          state.index = idx;
+          loadCurrentImage();
+          renderFileList();
+          updateUi();
+        });
+        elements.fileList.appendChild(row);
+      });
+    }
+
+    function updateUi() {
+      const total = state.images.length;
+      updateProgress();
+      elements.currentName.textContent = state.index >= 0 ? state.images[state.index].path : "No image loaded";
+      elements.prevBtn.disabled = state.index <= 0;
+      elements.nextBtn.disabled = state.index < 0 || state.index >= total - 1;
+      elements.clearBtn.disabled = state.index < 0;
+      elements.exportBtn.disabled = total === 0;
+
+      const label = labelForCurrent();
+      elements.centerX.value = label && Number.isFinite(label.center_x) ? round1(label.center_x) : "";
+      elements.centerY.value = label && Number.isFinite(label.center_y) ? round1(label.center_y) : "";
+      elements.radius.value = label && Number.isFinite(label.radius) ? round1(label.radius) : "";
+      elements.tolerance.value = label ? label.tolerance_px : 25;
+      elements.notes.value = label ? label.notes : "";
+      renderFileList();
+      draw();
+    }
+
+    function updateProgress() {
+      const total = state.images.length;
+      const labeled = state.images.filter(hasLabel).length;
+      elements.progress.textContent = `${labeled} / ${total} labeled`;
+      elements.imageCount.textContent = String(total);
+    }
+
+    function updateLabelFromFields() {
+      const label = labelForCurrent();
+      if (!label) return;
+      label.center_x = parseNumber(elements.centerX.value);
+      label.center_y = parseNumber(elements.centerY.value);
+      label.radius = parseNumber(elements.radius.value);
+      label.tolerance_px = Number.isFinite(parseNumber(elements.tolerance.value)) ? parseNumber(elements.tolerance.value) : 25;
+      label.notes = elements.notes.value.trim();
+      updateProgress();
+      renderFileList();
+      draw();
+    }
+
+    function parseNumber(value) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : NaN;
+    }
+
+    function round1(value) {
+      return Math.round(value * 10) / 10;
+    }
+
+    function distance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function pointerDown(event) {
+      if (!state.loadedImage) return;
+      const label = labelForCurrent();
+      const p = canvasToImage(event);
+      if (!hasLabel({ label })) {
+        label.center_x = p.x;
+        label.center_y = p.y;
+        label.radius = 1;
+        state.dragMode = "radius";
+      } else {
+        const center = { x: label.center_x, y: label.center_y };
+        const dist = distance(p, center);
+        const centerHit = Math.max(10 / state.view.scale, 8);
+        const edgeHit = Math.max(14 / state.view.scale, 8);
+        if (event.shiftKey || dist <= centerHit) {
+          state.dragMode = "center";
+        } else if (Math.abs(dist - label.radius) <= edgeHit) {
+          state.dragMode = "radius";
+        } else {
+          label.center_x = p.x;
+          label.center_y = p.y;
+          label.radius = Math.max(1, dist);
+          state.dragMode = "radius";
+        }
+      }
+      updateFieldsFromLabel();
+      draw();
+      event.preventDefault();
+    }
+
+    function pointerMove(event) {
+      if (!state.dragMode || !state.loadedImage) return;
+      const label = labelForCurrent();
+      const p = canvasToImage(event);
+      if (state.dragMode === "center") {
+        label.center_x = p.x;
+        label.center_y = p.y;
+      } else {
+        label.radius = Math.max(1, distance(p, { x: label.center_x, y: label.center_y }));
+      }
+      updateFieldsFromLabel();
+      draw();
+      event.preventDefault();
+    }
+
+    function pointerUp() {
+      if (state.dragMode) {
+        state.dragMode = null;
+        renderFileList();
+        updateUi();
+      }
+    }
+
+    function updateFieldsFromLabel() {
+      const label = labelForCurrent();
+      elements.centerX.value = round1(label.center_x);
+      elements.centerY.value = round1(label.center_y);
+      elements.radius.value = round1(label.radius);
+    }
+
+    function exportCsv() {
+      const rows = [["filename", "expected_found", "center_x", "center_y", "radius", "tolerance_px", "notes"]];
+      for (const item of state.images) {
+        const label = item.label;
+        rows.push([
+          item.path,
+          "1",
+          Number.isFinite(label.center_x) ? round1(label.center_x) : "",
+          Number.isFinite(label.center_y) ? round1(label.center_y) : "",
+          Number.isFinite(label.radius) ? round1(label.radius) : "",
+          label.tolerance_px || 25,
+          label.notes || ""
+        ]);
+      }
+      const csv = rows.map(row => row.map(csvCell).join(",")).join("\n") + "\n";
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "labels.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function csvCell(value) {
+      const text = String(value);
+      if (/[",\n]/.test(text)) {
+        return `"${text.replaceAll('"', '""')}"`;
+      }
+      return text;
+    }
+
+    function parseCsv(text) {
+      const rows = [];
+      let row = [];
+      let cell = "";
+      let quoted = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (quoted) {
+          if (ch === '"' && text[i + 1] === '"') {
+            cell += '"';
+            i++;
+          } else if (ch === '"') {
+            quoted = false;
+          } else {
+            cell += ch;
+          }
+        } else if (ch === '"') {
+          quoted = true;
+        } else if (ch === ",") {
+          row.push(cell);
+          cell = "";
+        } else if (ch === "\n") {
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = "";
+        } else if (ch !== "\r") {
+          cell += ch;
+        }
+      }
+      if (cell.length || row.length) {
+        row.push(cell);
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function importCsv(file) {
+      file.text().then(text => {
+        const rows = parseCsv(text);
+        const header = rows.shift() || [];
+        const indexes = Object.fromEntries(header.map((name, idx) => [name, idx]));
+        const byPath = new Map();
+        for (const row of rows) {
+          const filename = row[indexes.filename];
+          if (!filename) continue;
+          byPath.set(normalizedPath(filename), row);
+        }
+        for (const item of state.images) {
+          const row = byPath.get(item.path) || byPath.get(normalizedPath(item.path));
+          if (!row) continue;
+          item.label.center_x = parseNumber(row[indexes.center_x] || "");
+          item.label.center_y = parseNumber(row[indexes.center_y] || "");
+          item.label.radius = parseNumber(row[indexes.radius] || "");
+          item.label.tolerance_px = Number.isFinite(parseNumber(row[indexes.tolerance_px] || "")) ? parseNumber(row[indexes.tolerance_px]) : 25;
+          item.label.notes = row[indexes.notes] || "";
+        }
+        updateUi();
+      });
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    elements.fileInput.addEventListener("change", event => setImages(event.target.files));
+    elements.folderInput.addEventListener("change", event => setImages(event.target.files));
+    elements.importBtn.addEventListener("click", () => elements.csvInput.click());
+    elements.csvInput.addEventListener("change", event => {
+      const file = event.target.files[0];
+      if (file) importCsv(file);
+    });
+    elements.exportBtn.addEventListener("click", exportCsv);
+    elements.clearBtn.addEventListener("click", () => {
+      const label = labelForCurrent();
+      if (!label) return;
+      label.center_x = NaN;
+      label.center_y = NaN;
+      label.radius = NaN;
+      updateUi();
+    });
+    elements.prevBtn.addEventListener("click", () => {
+      if (state.index > 0) {
+        state.index--;
+        loadCurrentImage();
+        updateUi();
+      }
+    });
+    elements.nextBtn.addEventListener("click", () => {
+      if (state.index < state.images.length - 1) {
+        state.index++;
+        loadCurrentImage();
+        updateUi();
+      }
+    });
+    for (const input of [elements.centerX, elements.centerY, elements.radius, elements.tolerance, elements.notes]) {
+      input.addEventListener("input", updateLabelFromFields);
+    }
+    elements.canvas.addEventListener("pointerdown", pointerDown);
+    elements.canvas.addEventListener("pointermove", pointerMove);
+    window.addEventListener("pointerup", pointerUp);
+    window.addEventListener("resize", draw);
+    window.addEventListener("keydown", event => {
+      if (event.target.tagName === "INPUT") return;
+      if (event.key === "ArrowLeft") elements.prevBtn.click();
+      if (event.key === "ArrowRight") elements.nextBtn.click();
+      if (event.key === "Delete" || event.key === "Backspace") elements.clearBtn.click();
+    });
+
+    updateUi();
+  </script>
+</body>
+</html>

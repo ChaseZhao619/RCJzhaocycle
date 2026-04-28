@@ -1,0 +1,18 @@
+{
+  "timestamp_minute": "2026-04-29 04:00",
+  "scale_percent": 60,
+  "max_width": 480,
+  "max_height": 360,
+  "use_hough": 0,
+  "use_mask": 0,
+  "min_radius": 65,
+  "max_radius": 135,
+  "ring_band": 10,
+  "min_arc_bins": 16,
+  "dark_value_max": 170,
+  "dark_offset": 14,
+  "min_confidence": 36,
+  "green_hue_min": 28,
+  "green_hue_max": 96,
+  "green_sat_min": 28
+}
