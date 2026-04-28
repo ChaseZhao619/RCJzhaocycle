@@ -1,0 +1,5 @@
+numpy
+Pillow
+scipy
+# Optional, only needed for --camera live preview:
+opencv-python
