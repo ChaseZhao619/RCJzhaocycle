@@ -1,4 +1,5 @@
 #include "arc_detector.hpp"
+#include "frame_remapper.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -21,6 +22,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -57,6 +59,8 @@ struct SharedState {
     std::vector<unsigned char> binary_jpeg;
     std::string status_json = "{}";
     fs::path params_dir = "params";
+    bool remap_enabled = false;
+    std::string remap_path;
     std::atomic<bool> running{true};
 };
 
@@ -230,7 +234,34 @@ void drawDetection(cv::Mat& frame, const rcj::ArcDetection& result, double ms, d
     cv::putText(frame, text, cv::Point(8, 23), cv::FONT_HERSHEY_SIMPLEX, 0.62, cv::Scalar(255, 255, 255), 2);
 }
 
-std::string statusJson(const rcj::ArcDetection& result, double ms, double fps) {
+std::string jsonString(const std::string& value) {
+    std::ostringstream out;
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\':
+                out << "\\\\";
+                break;
+            case '"':
+                out << "\\\"";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                out << ch;
+                break;
+        }
+    }
+    return out.str();
+}
+
+std::string statusJson(const rcj::ArcDetection& result, double ms, double fps, bool remap_enabled, const std::string& remap_path) {
     std::ostringstream out;
     out << "{"
         << "\"found\":" << (result.found ? "true" : "false") << ','
@@ -241,7 +272,9 @@ std::string statusJson(const rcj::ArcDetection& result, double ms, double fps) {
         << "\"angle_end\":" << result.angle_end << ','
         << "\"confidence\":" << result.confidence << ','
         << "\"ms\":" << ms << ','
-        << "\"fps\":" << fps
+        << "\"fps\":" << fps << ','
+        << "\"remap_enabled\":" << (remap_enabled ? "true" : "false") << ','
+        << "\"remap_path\":\"" << jsonString(remap_path) << "\""
         << "}";
     return out.str();
 }
@@ -350,7 +383,7 @@ async function pollStatus() {
   try {
     const s = await (await fetch("/api/status")).json();
     document.getElementById("status").textContent =
-      `${s.found ? "FOUND" : "MISS"} ms=${s.ms.toFixed(2)} fps=${s.fps.toFixed(1)} conf=${s.confidence.toFixed(3)} radius=${s.radius.toFixed(1)}`;
+      `${s.found ? "FOUND" : "MISS"} ms=${s.ms.toFixed(2)} fps=${s.fps.toFixed(1)} conf=${s.confidence.toFixed(3)} radius=${s.radius.toFixed(1)} remap=${s.remap_enabled ? "on" : "off"}`;
   } catch (e) {}
 }
 loadParams();
@@ -473,7 +506,7 @@ void handleClient(int fd, SharedState& state) {
     close(fd);
 }
 
-void captureLoop(SharedState& state, int camera_index) {
+void captureLoop(SharedState& state, int camera_index, const rcj::FrameRemapper& remapper) {
     cv::VideoCapture cap(camera_index);
     if (!cap.isOpened()) {
         std::cerr << "failed to open camera " << camera_index << "\n";
@@ -492,6 +525,17 @@ void captureLoop(SharedState& state, int camera_index) {
         if (frame.empty()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
+        }
+        if (remapper.enabled()) {
+            cv::Mat remapped;
+            std::string error;
+            if (!remapper.remap(frame, remapped, &error)) {
+                std::cerr << error << "\n";
+                state.running = false;
+                g_running = false;
+                break;
+            }
+            frame = remapped;
         }
 
         TuneState tune;
@@ -522,7 +566,7 @@ void captureLoop(SharedState& state, int camera_index) {
             std::lock_guard<std::mutex> lock(state.mutex);
             state.preview_jpeg = std::move(preview);
             state.binary_jpeg = std::move(binary);
-            state.status_json = statusJson(result, ms, fps);
+            state.status_json = statusJson(result, ms, fps, state.remap_enabled, state.remap_path);
         }
     }
 }
@@ -554,7 +598,7 @@ int makeServerSocket(const std::string& bind_host, int port) {
 }
 
 void printUsage(const char* argv0) {
-    std::cerr << "usage: " << argv0 << " [--camera 0] [--bind 0.0.0.0] [--port 8080] [--params-dir params]\n";
+    std::cerr << "usage: " << argv0 << " [--camera 0] [--bind 0.0.0.0] [--port 8080] [--params-dir params] [--remap config/remap.xml | --no-remap]\n";
 }
 
 }  // namespace
@@ -564,6 +608,8 @@ int main(int argc, char** argv) {
     std::string bind_host = "0.0.0.0";
     int port = 8080;
     fs::path params_dir = "params";
+    bool remap_enabled = false;
+    std::string remap_path;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -575,6 +621,12 @@ int main(int argc, char** argv) {
             port = std::stoi(argv[++i]);
         } else if (arg == "--params-dir" && i + 1 < argc) {
             params_dir = argv[++i];
+        } else if (arg == "--remap" && i + 1 < argc) {
+            remap_enabled = true;
+            remap_path = argv[++i];
+        } else if (arg == "--no-remap") {
+            remap_enabled = false;
+            remap_path.clear();
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return 0;
@@ -590,9 +642,20 @@ int main(int argc, char** argv) {
 
     SharedState state;
     state.params_dir = params_dir;
+    state.remap_enabled = remap_enabled;
+    state.remap_path = remap_path;
+    rcj::FrameRemapper remapper;
+    if (remap_enabled) {
+        std::string error;
+        if (!remapper.load(remap_path, &error)) {
+            std::cerr << error << "\n";
+            return 1;
+        }
+        std::cout << "remap enabled: " << remapper.path() << " size=" << remapper.mapSize().width << 'x' << remapper.mapSize().height << "\n";
+    }
     saveParams(state.tune, state.params_dir);
 
-    std::thread capture_thread(captureLoop, std::ref(state), camera);
+    std::thread capture_thread(captureLoop, std::ref(state), camera, std::cref(remapper));
     const int server_fd = makeServerSocket(bind_host, port);
     if (server_fd < 0) {
         std::cerr << "failed to bind " << bind_host << ':' << port << "\n";

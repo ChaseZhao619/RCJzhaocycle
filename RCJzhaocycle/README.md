@@ -49,6 +49,41 @@ if (result.found) {
 
 默认处理流程会把 `800x600` 输入缩放到 `400x300` 做检测，并在检测成功后输出圆弧几何信息。调试时可以设置 `return_binary_roi=true`，返回目标附近的二值 ROI；实时运行建议关闭。
 
+## 鱼眼查找表 Remap
+
+如果摄像头使用鱼眼镜头，把 OpenCV FileStorage 格式的查找表放到：
+
+```text
+config/remap.xml
+```
+
+XML 支持以下键名组合：
+
+```text
+map1 + map2
+map_x + map_y
+xmap + ymap
+fast_map_1 + fast_map_2
+```
+
+实时工具会在检测前执行：
+
+```cpp
+cv::remap(raw_frame, corrected_frame, map1, map2, cv::INTER_LINEAR);
+```
+
+检测结果、圆心、半径、ROI 和网页叠加都使用 remap 后图像坐标。查找表尺寸必须匹配摄像头帧尺寸；当前默认摄像头帧为 `800x600`。
+
+手动运行时启用 remap：
+
+```bash
+./build/arc_web_tuner --camera 0 --remap config/remap.xml
+./build/arc_tuner --camera 0 --remap config/remap.xml
+./build/arc_benchmark --input pic --remap config/remap.xml
+```
+
+启动脚本会自动检查 `config/remap.xml`：文件存在则启用 remap，不存在则以 raw 模式启动。
+
 ## Web 实时预览和参数调节
 
 从本机通过 SSH 启动树莓派服务：

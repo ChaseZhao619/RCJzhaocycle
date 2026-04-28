@@ -1,4 +1,5 @@
 #include "arc_detector.hpp"
+#include "frame_remapper.hpp"
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -148,7 +149,7 @@ void createTrackbars(const std::string& window, TuneState& state) {
 }
 
 void printUsage(const char* argv0) {
-    std::cerr << "usage: " << argv0 << " [--input pic | --camera 0] [--display :0]\n";
+    std::cerr << "usage: " << argv0 << " [--input pic | --camera 0] [--display :0] [--remap config/remap.xml | --no-remap]\n";
 }
 
 }  // namespace
@@ -157,6 +158,8 @@ int main(int argc, char** argv) {
     fs::path input = "pic";
     int camera = -1;
     std::string display;
+    bool remap_enabled = false;
+    std::string remap_path;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -167,6 +170,12 @@ int main(int argc, char** argv) {
             camera = std::stoi(argv[++i]);
         } else if (arg == "--display" && i + 1 < argc) {
             display = argv[++i];
+        } else if (arg == "--remap" && i + 1 < argc) {
+            remap_enabled = true;
+            remap_path = argv[++i];
+        } else if (arg == "--no-remap") {
+            remap_enabled = false;
+            remap_path.clear();
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return 0;
@@ -178,6 +187,16 @@ int main(int argc, char** argv) {
 
     if (!display.empty()) {
         setenv("DISPLAY", display.c_str(), 1);
+    }
+
+    rcj::FrameRemapper remapper;
+    if (remap_enabled) {
+        std::string error;
+        if (!remapper.load(remap_path, &error)) {
+            std::cerr << error << "\n";
+            return 1;
+        }
+        std::cout << "remap enabled: " << remapper.path() << " size=" << remapper.mapSize().width << 'x' << remapper.mapSize().height << "\n";
     }
 
     const std::string window = "arc tuner";
@@ -233,6 +252,16 @@ int main(int argc, char** argv) {
                 return 1;
             }
             label = images[image_index].filename().string();
+        }
+        if (remapper.enabled()) {
+            cv::Mat remapped;
+            std::string error;
+            if (!remapper.remap(frame, remapped, &error)) {
+                std::cerr << error << "\n";
+                return 1;
+            }
+            frame = remapped;
+            label += " remapped";
         }
 
         const rcj::ArcDetectorConfig config = makeConfig(state);

@@ -1,4 +1,5 @@
 #include "arc_detector.hpp"
+#include "frame_remapper.hpp"
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -55,7 +56,7 @@ std::vector<fs::path> collectImages(const fs::path& input) {
 }
 
 void printUsage(const char* argv0) {
-    std::cerr << "usage: " << argv0 << " [--input pic] [--repeat 1] [--binary-roi]\n";
+    std::cerr << "usage: " << argv0 << " [--input pic] [--repeat 1] [--binary-roi] [--remap config/remap.xml | --no-remap]\n";
 }
 
 }  // namespace
@@ -64,6 +65,8 @@ int main(int argc, char** argv) {
     fs::path input = "pic";
     int repeat = 1;
     bool binary_roi = false;
+    bool remap_enabled = false;
+    std::string remap_path;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -73,6 +76,12 @@ int main(int argc, char** argv) {
             repeat = std::max(1, std::stoi(argv[++i]));
         } else if (arg == "--binary-roi") {
             binary_roi = true;
+        } else if (arg == "--remap" && i + 1 < argc) {
+            remap_enabled = true;
+            remap_path = argv[++i];
+        } else if (arg == "--no-remap") {
+            remap_enabled = false;
+            remap_path.clear();
         } else if (arg == "--help" || arg == "-h") {
             printUsage(argv[0]);
             return 0;
@@ -90,6 +99,15 @@ int main(int argc, char** argv) {
 
     rcj::ArcDetectorConfig config;
     config.return_binary_roi = binary_roi;
+    rcj::FrameRemapper remapper;
+    if (remap_enabled) {
+        std::string error;
+        if (!remapper.load(remap_path, &error)) {
+            std::cerr << error << "\n";
+            return 1;
+        }
+        std::cerr << "remap enabled: " << remapper.path() << " size=" << remapper.mapSize().width << 'x' << remapper.mapSize().height << "\n";
+    }
 
     std::vector<double> all_times_ms;
     int found_count = 0;
@@ -101,13 +119,21 @@ int main(int argc, char** argv) {
             std::cerr << "failed to read " << path << "\n";
             continue;
         }
+        cv::Mat processed = image;
+        if (remapper.enabled()) {
+            std::string error;
+            if (!remapper.remap(image, processed, &error)) {
+                std::cerr << error << "\n";
+                return 1;
+            }
+        }
 
         rcj::ArcDetection last_result;
         std::vector<double> image_times_ms;
         for (int i = 0; i < repeat; ++i) {
             rcj::ArcDetector detector(config);
             const auto start = std::chrono::steady_clock::now();
-            last_result = detector.detect(image);
+            last_result = detector.detect(processed);
             const auto end = std::chrono::steady_clock::now();
             const double ms = std::chrono::duration<double, std::milli>(end - start).count();
             image_times_ms.push_back(ms);
@@ -120,8 +146,8 @@ int main(int argc, char** argv) {
         const double avg_ms = std::accumulate(image_times_ms.begin(), image_times_ms.end(), 0.0) /
                               static_cast<double>(image_times_ms.size());
         std::cout << path.filename().string() << ','
-                  << image.cols << ','
-                  << image.rows << ','
+                  << processed.cols << ','
+                  << processed.rows << ','
                   << (last_result.found ? 1 : 0) << ','
                   << last_result.center.x << ','
                   << last_result.center.y << ','

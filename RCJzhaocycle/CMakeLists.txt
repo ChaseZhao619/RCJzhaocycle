@@ -10,6 +10,7 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui videoio)
 
 add_library(rcj_arc_detector
     src/arc_detector.cpp
+    src/frame_remapper.cpp
 )
 
 target_include_directories(rcj_arc_detector
