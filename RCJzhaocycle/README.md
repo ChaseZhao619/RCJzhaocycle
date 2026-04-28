@@ -49,6 +49,52 @@ if (result.found) {
 
 默认处理流程会把 `800x600` 输入缩放到 `400x300` 做检测，并在检测成功后输出圆弧几何信息。调试时可以设置 `return_binary_roi=true`，返回目标附近的二值 ROI；实时运行建议关闭。
 
+## Web 实时预览和参数调节
+
+从本机通过 SSH 启动树莓派服务：
+
+```bash
+./scripts/start_remote_web_tuner.sh rcj@10.32.0.172
+```
+
+默认会同步当前工程到树莓派 `/home/rcj/RCJzhaocycle`，编译 `arc_web_tuner`，并在后台启动：
+
+```text
+http://10.32.0.172:8080/
+```
+
+网页中可以查看摄像头实时画面、目标圆弧叠加、二值 ROI，并用滑条调节检测参数。每次滑条变化都会自动保存参数：
+
+```text
+params/latest_params.json
+params/arc_params_YYYYMMDD_HHMM.json
+params/arc_params_history.csv
+```
+
+文件名中的时间戳精确到分钟。调参结束后，把树莓派上的参数文档拉回本机：
+
+```bash
+./scripts/fetch_remote_params.sh rcj@10.32.0.172
+```
+
+默认保存到本机：
+
+```text
+remote_params/
+```
+
+如果需要换端口或摄像头编号：
+
+```bash
+PORT=8090 CAMERA=0 ./scripts/start_remote_web_tuner.sh rcj@10.32.0.172
+```
+
+停止远端服务：
+
+```bash
+ssh rcj@10.32.0.172 'pkill -x arc_web_tuner'
+```
+
 ## Python 离线参考
 
 ### 安装依赖

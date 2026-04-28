@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui videoio)
 
 add_library(rcj_arc_detector
     src/arc_detector.cpp
@@ -38,6 +38,34 @@ target_link_libraries(arc_benchmark
 )
 
 target_compile_options(arc_benchmark
+    PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -O3>
+)
+
+add_executable(arc_tuner
+    tools/arc_tuner.cpp
+)
+
+target_link_libraries(arc_tuner
+    PRIVATE
+        rcj_arc_detector
+)
+
+target_compile_options(arc_tuner
+    PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -O3>
+)
+
+add_executable(arc_web_tuner
+    tools/arc_web_tuner.cpp
+)
+
+target_link_libraries(arc_web_tuner
+    PRIVATE
+        rcj_arc_detector
+)
+
+target_compile_options(arc_web_tuner
     PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -O3>
 )
