@@ -19,7 +19,10 @@ struct ArcDetection {
 
 struct ArcDetectorConfig {
     float processing_scale = 0.5F;
+    int processing_max_width = 400;
+    int processing_max_height = 300;
     bool return_binary_roi = false;
+    bool use_hough = false;
 
     int min_radius = 45;
     int max_radius = 430;
@@ -67,9 +70,10 @@ private:
     };
 
     ArcDetection detectInRect(const cv::Mat& frame, const cv::Rect& full_rect);
+    float processingScaleFor(const cv::Size& size) const;
     void buildMasks(const cv::Mat& small, cv::Mat& gray, cv::Mat& field_mask, cv::Mat& dark_mask) const;
-    std::vector<Candidate> makeCandidates(const cv::Mat& gray, const cv::Mat& dark_mask) const;
-    Score scoreCandidate(const Candidate& candidate, const cv::Mat& dark_mask) const;
+    std::vector<Candidate> makeCandidates(const cv::Mat& gray, const cv::Mat& dark_mask, float scale) const;
+    Score scoreCandidate(const Candidate& candidate, const cv::Mat& dark_mask, float scale) const;
     cv::Rect trackingRect(const cv::Size& frame_size) const;
 
     ArcDetectorConfig config_;

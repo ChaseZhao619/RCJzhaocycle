@@ -54,6 +54,8 @@ int longestGapStart(const std::vector<unsigned char>& bins) {
 
 ArcDetector::ArcDetector(ArcDetectorConfig config) : config_(config) {
     config_.processing_scale = clampFloat(config_.processing_scale, 0.25F, 1.0F);
+    config_.processing_max_width = std::max(64, config_.processing_max_width);
+    config_.processing_max_height = std::max(48, config_.processing_max_height);
     config_.angle_bins = std::max(24, config_.angle_bins);
     config_.max_candidates = std::max(4, config_.max_candidates);
 }
@@ -99,6 +101,12 @@ cv::Rect ArcDetector::trackingRect(const cv::Size& frame_size) const {
     return clampRect(rect, frame_size);
 }
 
+float ArcDetector::processingScaleFor(const cv::Size& size) const {
+    const float by_width = static_cast<float>(config_.processing_max_width) / static_cast<float>(std::max(1, size.width));
+    const float by_height = static_cast<float>(config_.processing_max_height) / static_cast<float>(std::max(1, size.height));
+    return clampFloat(std::min({config_.processing_scale, by_width, by_height}), 0.08F, 1.0F);
+}
+
 ArcDetection ArcDetector::detectInRect(const cv::Mat& frame, const cv::Rect& full_rect) {
     const cv::Rect roi = clampRect(full_rect, frame.size());
     if (roi.empty()) {
@@ -107,18 +115,19 @@ ArcDetection ArcDetector::detectInRect(const cv::Mat& frame, const cv::Rect& ful
 
     cv::Mat cropped = frame(roi);
     cv::Mat small;
-    cv::resize(cropped, small, cv::Size(), config_.processing_scale, config_.processing_scale, cv::INTER_AREA);
+    const float scale = processingScaleFor(roi.size());
+    cv::resize(cropped, small, cv::Size(), scale, scale, cv::INTER_AREA);
 
     cv::Mat gray;
     cv::Mat field_mask;
     cv::Mat dark_mask;
     buildMasks(small, gray, field_mask, dark_mask);
 
-    std::vector<Candidate> candidates = makeCandidates(gray, dark_mask);
+    std::vector<Candidate> candidates = makeCandidates(gray, dark_mask, scale);
     Score best_score;
     Candidate best_candidate;
     for (const Candidate& candidate : candidates) {
-        Score score = scoreCandidate(candidate, dark_mask);
+        Score score = scoreCandidate(candidate, dark_mask, scale);
         if (score.confidence > best_score.confidence) {
             best_score = score;
             best_candidate = candidate;
@@ -129,7 +138,7 @@ ArcDetection ArcDetector::detectInRect(const cv::Mat& frame, const cv::Rect& ful
         return {};
     }
 
-    const float inv_scale = 1.0F / config_.processing_scale;
+    const float inv_scale = 1.0F / scale;
     ArcDetection result;
     result.found = true;
     result.center = cv::Point2f(
@@ -150,7 +159,7 @@ ArcDetection ArcDetector::detectInRect(const cv::Mat& frame, const cv::Rect& ful
         frame.size());
 
     if (config_.return_binary_roi) {
-        const int small_band = std::max(3, static_cast<int>(std::round(config_.ring_band * config_.processing_scale)));
+        const int small_band = std::max(3, static_cast<int>(std::round(config_.ring_band * scale)));
         cv::Rect small_rect(
             static_cast<int>(std::floor(best_candidate.center.x - best_candidate.radius - small_band)),
             static_cast<int>(std::floor(best_candidate.center.y - best_candidate.radius - small_band)),
@@ -230,35 +239,37 @@ void ArcDetector::buildMasks(const cv::Mat& small, cv::Mat& gray, cv::Mat& field
     cv::morphologyEx(dark_mask, dark_mask, cv::MORPH_CLOSE, kernel5);
 }
 
-std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& gray, const cv::Mat& dark_mask) const {
+std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& gray, const cv::Mat& dark_mask, float scale) const {
     std::vector<Candidate> candidates;
     if (gray.empty() || dark_mask.empty()) {
         return candidates;
     }
 
-    cv::Mat hough_source;
-    cv::GaussianBlur(dark_mask, hough_source, cv::Size(5, 5), 1.0);
+    const int min_radius = std::max(8, static_cast<int>(std::round(config_.min_radius * scale)));
+    const int max_radius = std::max(min_radius + 2, static_cast<int>(std::round(config_.max_radius * scale)));
 
-    const int min_radius = std::max(8, static_cast<int>(std::round(config_.min_radius * config_.processing_scale)));
-    const int max_radius = std::max(min_radius + 2, static_cast<int>(std::round(config_.max_radius * config_.processing_scale)));
-    const int min_dist = std::max(20, static_cast<int>(std::round(config_.hough_min_dist * config_.processing_scale)));
+    if (config_.use_hough) {
+        cv::Mat hough_source;
+        cv::GaussianBlur(dark_mask, hough_source, cv::Size(5, 5), 1.0);
+        const int min_dist = std::max(20, static_cast<int>(std::round(config_.hough_min_dist * scale)));
 
-    std::vector<cv::Vec3f> circles;
-    cv::HoughCircles(
-        hough_source,
-        circles,
-        cv::HOUGH_GRADIENT,
-        config_.hough_dp,
-        min_dist,
-        config_.hough_param1,
-        config_.hough_param2,
-        min_radius,
-        max_radius);
+        std::vector<cv::Vec3f> circles;
+        cv::HoughCircles(
+            hough_source,
+            circles,
+            cv::HOUGH_GRADIENT,
+            config_.hough_dp,
+            min_dist,
+            config_.hough_param1,
+            config_.hough_param2,
+            min_radius,
+            max_radius);
 
-    for (const cv::Vec3f& circle : circles) {
-        candidates.push_back({cv::Point2f(circle[0], circle[1]), circle[2]});
-        if (static_cast<int>(candidates.size()) >= config_.max_candidates) {
-            return candidates;
+        for (const cv::Vec3f& circle : circles) {
+            candidates.push_back({cv::Point2f(circle[0], circle[1]), circle[2]});
+            if (static_cast<int>(candidates.size()) >= config_.max_candidates) {
+                return candidates;
+            }
         }
     }
 
@@ -296,13 +307,13 @@ std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& g
     return candidates;
 }
 
-ArcDetector::Score ArcDetector::scoreCandidate(const Candidate& candidate, const cv::Mat& dark_mask) const {
+ArcDetector::Score ArcDetector::scoreCandidate(const Candidate& candidate, const cv::Mat& dark_mask, float scale) const {
     Score score;
     if (candidate.radius <= 1.0F) {
         return score;
     }
 
-    const int band = std::max(3, static_cast<int>(std::round(config_.ring_band * config_.processing_scale)));
+    const int band = std::max(3, static_cast<int>(std::round(config_.ring_band * scale)));
     const float inner = std::max(1.0F, candidate.radius - band);
     const float outer = candidate.radius + band;
     const float interior_radius = std::max(1.0F, candidate.radius - 2.7F * band);
