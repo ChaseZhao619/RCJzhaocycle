@@ -1,5 +1,5 @@
 {
-  "timestamp_minute": "2026-04-29 01:06",
+  "timestamp_minute": "2026-04-29 01:05",
   "scale_percent": 60,
   "max_width": 480,
   "max_height": 360,
@@ -7,7 +7,7 @@
   "min_radius": 70,
   "max_radius": 240,
   "ring_band": 10,
-  "min_arc_bins": 16,
+  "min_arc_bins": 12,
   "dark_value_max": 170,
   "dark_offset": 14,
   "min_confidence": 18,
