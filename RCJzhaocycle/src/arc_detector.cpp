@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <numeric>
+#include <random>
 
 namespace rcj {
 namespace {
@@ -50,6 +53,32 @@ int longestGapStart(const std::vector<unsigned char>& bins) {
     return (best_start + std::max(0, best_len)) % n;
 }
 
+bool circleFromPoints(const cv::Point2f& p1, const cv::Point2f& p2, const cv::Point2f& p3, cv::Point2f& center, float& radius) {
+    const double x1 = p1.x;
+    const double y1 = p1.y;
+    const double x2 = p2.x;
+    const double y2 = p2.y;
+    const double x3 = p3.x;
+    const double y3 = p3.y;
+    const double temp = x2 * x2 + y2 * y2;
+    const double bc = (x1 * x1 + y1 * y1 - temp) * 0.5;
+    const double cd = (temp - x3 * x3 - y3 * y3) * 0.5;
+    const double det = (x1 - x2) * (y2 - y3) - (x2 - x3) * (y1 - y2);
+    if (std::abs(det) < 1e-5) {
+        return false;
+    }
+
+    const double cx = (bc * (y2 - y3) - cd * (y1 - y2)) / det;
+    const double cy = ((x1 - x2) * cd - (x2 - x3) * bc) / det;
+    const double r = std::hypot(cx - x1, cy - y1);
+    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(r)) {
+        return false;
+    }
+    center = cv::Point2f(static_cast<float>(cx), static_cast<float>(cy));
+    radius = static_cast<float>(r);
+    return true;
+}
+
 }  // namespace
 
 ArcDetector::ArcDetector(ArcDetectorConfig config) : config_(config) {
@@ -58,6 +87,8 @@ ArcDetector::ArcDetector(ArcDetectorConfig config) : config_(config) {
     config_.processing_max_height = std::max(48, config_.processing_max_height);
     config_.angle_bins = std::max(24, config_.angle_bins);
     config_.max_candidates = std::max(4, config_.max_candidates);
+    config_.ransac_iterations = std::max(0, config_.ransac_iterations);
+    config_.ransac_max_points = std::max(64, config_.ransac_max_points);
 }
 
 void ArcDetector::reset() {
@@ -247,6 +278,17 @@ std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& g
 
     const int min_radius = std::max(8, static_cast<int>(std::round(config_.min_radius * scale)));
     const int max_radius = std::max(min_radius + 2, static_cast<int>(std::round(config_.max_radius * scale)));
+    const auto append_candidate = [&](const cv::Point2f& center, float radius) {
+        if (radius < min_radius || radius > max_radius) {
+            return;
+        }
+        for (const Candidate& existing : candidates) {
+            if (std::abs(existing.radius - radius) < 2.0F && cv::norm(existing.center - center) < 3.0F) {
+                return;
+            }
+        }
+        candidates.push_back({center, radius});
+    };
 
     if (config_.use_hough) {
         cv::Mat hough_source;
@@ -266,7 +308,7 @@ std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& g
             max_radius);
 
         for (const cv::Vec3f& circle : circles) {
-            candidates.push_back({cv::Point2f(circle[0], circle[1]), circle[2]});
+            append_candidate(cv::Point2f(circle[0], circle[1]), circle[2]);
             if (static_cast<int>(candidates.size()) >= config_.max_candidates) {
                 return candidates;
             }
@@ -279,8 +321,9 @@ std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& g
         return cv::contourArea(lhs) > cv::contourArea(rhs);
     });
 
+    const int contour_candidate_limit = config_.use_ransac_candidates ? std::max(4, config_.max_candidates / 2) : config_.max_candidates;
     for (const std::vector<cv::Point>& contour : contours) {
-        if (static_cast<int>(candidates.size()) >= config_.max_candidates) {
+        if (static_cast<int>(candidates.size()) >= contour_candidate_limit) {
             break;
         }
         const double area = cv::contourArea(contour);
@@ -291,17 +334,103 @@ std::vector<ArcDetector::Candidate> ArcDetector::makeCandidates(const cv::Mat& g
         if (contour.size() >= 12) {
             const cv::RotatedRect ellipse = cv::fitEllipse(contour);
             const float radius = (ellipse.size.width + ellipse.size.height) * 0.25F;
-            if (radius >= min_radius && radius <= max_radius) {
-                candidates.push_back({ellipse.center, radius});
-            }
+            append_candidate(ellipse.center, radius);
         }
 
         cv::Point2f center;
         float radius = 0.0F;
         cv::minEnclosingCircle(contour, center, radius);
-        if (radius >= min_radius && radius <= max_radius) {
-            candidates.push_back({center, radius});
+        append_candidate(center, radius);
+    }
+
+    if (!config_.use_ransac_candidates || config_.ransac_iterations == 0 || static_cast<int>(candidates.size()) >= config_.max_candidates) {
+        return candidates;
+    }
+
+    cv::Mat edge;
+    cv::morphologyEx(dark_mask, edge, cv::MORPH_GRADIENT, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3)));
+    std::vector<cv::Point> edge_points_i;
+    cv::findNonZero(edge, edge_points_i);
+    if (edge_points_i.size() < 12) {
+        return candidates;
+    }
+
+    std::vector<cv::Point2f> points;
+    points.reserve(std::min<std::size_t>(edge_points_i.size(), static_cast<std::size_t>(config_.ransac_max_points)));
+    if (static_cast<int>(edge_points_i.size()) <= config_.ransac_max_points) {
+        for (const cv::Point& point : edge_points_i) {
+            points.emplace_back(static_cast<float>(point.x), static_cast<float>(point.y));
         }
+    } else {
+        const double step = static_cast<double>(edge_points_i.size()) / static_cast<double>(config_.ransac_max_points);
+        for (int i = 0; i < config_.ransac_max_points; ++i) {
+            const cv::Point& point = edge_points_i[static_cast<std::size_t>(std::floor(i * step))];
+            points.emplace_back(static_cast<float>(point.x), static_cast<float>(point.y));
+        }
+    }
+
+    struct RoughCandidate {
+        Candidate candidate;
+        float score = 0.0F;
+    };
+    std::vector<RoughCandidate> rough;
+    rough.reserve(16);
+    std::mt19937 rng(7);
+    std::uniform_int_distribution<int> pick(0, static_cast<int>(points.size()) - 1);
+    const int band = std::max(3, static_cast<int>(std::round(config_.ring_band * scale)));
+    const int bins = std::max(24, config_.angle_bins);
+    const float min_center_x = -static_cast<float>(dark_mask.cols);
+    const float max_center_x = static_cast<float>(dark_mask.cols * 2);
+    const float min_center_y = -static_cast<float>(dark_mask.rows);
+    const float max_center_y = static_cast<float>(dark_mask.rows * 2);
+
+    for (int iter = 0; iter < config_.ransac_iterations; ++iter) {
+        const int i1 = pick(rng);
+        int i2 = pick(rng);
+        int i3 = pick(rng);
+        if (i1 == i2 || i1 == i3 || i2 == i3) {
+            continue;
+        }
+
+        cv::Point2f center;
+        float radius = 0.0F;
+        if (!circleFromPoints(points[static_cast<std::size_t>(i1)], points[static_cast<std::size_t>(i2)], points[static_cast<std::size_t>(i3)], center, radius)) {
+            continue;
+        }
+        if (radius < min_radius || radius > max_radius || center.x < min_center_x || center.x > max_center_x || center.y < min_center_y || center.y > max_center_y) {
+            continue;
+        }
+
+        std::vector<unsigned char> angle_bins(static_cast<std::size_t>(bins), 0);
+        int support = 0;
+        for (const cv::Point2f& point : points) {
+            const float dx = point.x - center.x;
+            const float dy = point.y - center.y;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            if (std::abs(distance - radius) <= static_cast<float>(band)) {
+                ++support;
+                float angle = std::atan2(dy, dx) * 180.0F / kPi;
+                angle = normAngle(angle);
+                const int bin = std::min(bins - 1, static_cast<int>(angle / 360.0F * bins));
+                angle_bins[static_cast<std::size_t>(bin)] = 1;
+            }
+        }
+        const int coverage = static_cast<int>(std::accumulate(angle_bins.begin(), angle_bins.end(), 0));
+        if (support < 16 || coverage < std::max(4, config_.min_arc_bins / 2)) {
+            continue;
+        }
+        const float rough_score = static_cast<float>(support) * (1.0F + static_cast<float>(coverage) / static_cast<float>(bins));
+        rough.push_back({{center, radius}, rough_score});
+    }
+
+    std::sort(rough.begin(), rough.end(), [](const RoughCandidate& lhs, const RoughCandidate& rhs) {
+        return lhs.score > rhs.score;
+    });
+    for (const RoughCandidate& item : rough) {
+        if (static_cast<int>(candidates.size()) >= config_.max_candidates) {
+            break;
+        }
+        append_candidate(item.candidate.center, item.candidate.radius);
     }
 
     return candidates;

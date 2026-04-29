@@ -25,6 +25,7 @@ struct TuneState {
     int max_width = 400;
     int max_height = 300;
     int use_hough = 0;
+    int use_ransac = 1;
     int min_radius = 45;
     int max_radius = 430;
     int ring_band = 10;
@@ -82,6 +83,7 @@ rcj::ArcDetectorConfig makeConfig(const TuneState& state) {
     config.processing_max_width = std::max(64, state.max_width);
     config.processing_max_height = std::max(48, state.max_height);
     config.use_hough = state.use_hough != 0;
+    config.use_ransac_candidates = state.use_ransac != 0;
     config.return_binary_roi = true;
     config.min_radius = std::max(1, state.min_radius);
     config.max_radius = std::max(config.min_radius + 1, state.max_radius);
@@ -118,6 +120,7 @@ void printConfig(const TuneState& state) {
               << ", processing_max_width=" << config.processing_max_width
               << ", processing_max_height=" << config.processing_max_height
               << ", use_hough=" << config.use_hough
+              << ", use_ransac_candidates=" << config.use_ransac_candidates
               << ", min_radius=" << config.min_radius
               << ", max_radius=" << config.max_radius
               << ", ring_band=" << config.ring_band
@@ -136,6 +139,7 @@ void createTrackbars(const std::string& window, TuneState& state) {
     cv::createTrackbar("max width", window, &state.max_width, 800);
     cv::createTrackbar("max height", window, &state.max_height, 600);
     cv::createTrackbar("use hough", window, &state.use_hough, 1);
+    cv::createTrackbar("use ransac", window, &state.use_ransac, 1);
     cv::createTrackbar("min radius", window, &state.min_radius, 800);
     cv::createTrackbar("max radius", window, &state.max_radius, 900);
     cv::createTrackbar("ring band", window, &state.ring_band, 80);

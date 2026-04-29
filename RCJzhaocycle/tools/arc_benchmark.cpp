@@ -211,6 +211,8 @@ void applyConfigArg(rcj::ArcDetectorConfig& config, const std::string& arg, cons
         config.processing_max_height = std::stoi(value);
     } else if (arg == "--use-hough") {
         config.use_hough = std::stoi(value) != 0;
+    } else if (arg == "--use-ransac") {
+        config.use_ransac_candidates = std::stoi(value) != 0;
     } else if (arg == "--min-radius") {
         config.min_radius = std::stoi(value);
     } else if (arg == "--max-radius") {
@@ -265,7 +267,7 @@ bool applyKeepMask(cv::Mat& image, const cv::Mat& keep_mask, std::string& error)
 
 void printUsage(const char* argv0) {
     std::cerr << "usage: " << argv0 << " [--input pic | --testset testset] [--labels testset/labels.csv] [--repeat 1] [--binary-roi] [--mask config/robot_mask.png] [--remap config/remap.xml | --no-remap]\n"
-              << "       detector params: --scale-percent N --max-width N --max-height N --use-hough 0|1 --min-radius N --max-radius N\n"
+              << "       detector params: --scale-percent N --max-width N --max-height N --use-hough 0|1 --use-ransac 0|1 --min-radius N --max-radius N\n"
               << "                        --ring-band N --min-arc-bins N --dark-value-max N --dark-offset N --min-confidence N\n"
               << "                        --green-hue-min N --green-hue-max N --green-sat-min N\n";
 }

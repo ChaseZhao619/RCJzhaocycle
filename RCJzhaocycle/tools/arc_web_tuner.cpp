@@ -40,6 +40,7 @@ struct TuneState {
     int max_width = 400;
     int max_height = 300;
     int use_hough = 0;
+    int use_ransac = 1;
     int use_mask = 0;
     int min_radius = 45;
     int max_radius = 430;
@@ -81,6 +82,7 @@ rcj::ArcDetectorConfig makeConfig(const TuneState& state) {
     config.processing_max_width = std::max(64, state.max_width);
     config.processing_max_height = std::max(48, state.max_height);
     config.use_hough = state.use_hough != 0;
+    config.use_ransac_candidates = state.use_ransac != 0;
     config.return_binary_roi = true;
     config.min_radius = std::max(1, state.min_radius);
     config.max_radius = std::max(config.min_radius + 1, state.max_radius);
@@ -134,6 +136,7 @@ std::string paramsJson(const TuneState& state, const std::string& timestamp) {
         << "  \"max_width\": " << state.max_width << ",\n"
         << "  \"max_height\": " << state.max_height << ",\n"
         << "  \"use_hough\": " << state.use_hough << ",\n"
+        << "  \"use_ransac\": " << state.use_ransac << ",\n"
         << "  \"use_mask\": " << state.use_mask << ",\n"
         << "  \"min_radius\": " << state.min_radius << ",\n"
         << "  \"max_radius\": " << state.max_radius << ",\n"
@@ -167,7 +170,7 @@ void saveParams(const TuneState& state, const fs::path& params_dir) {
     const bool needs_header = !fs::exists(history_path);
     std::ofstream history(history_path, std::ios::app);
     if (needs_header) {
-        history << "timestamp_minute,scale_percent,max_width,max_height,use_hough,use_mask,min_radius,max_radius,"
+        history << "timestamp_minute,scale_percent,max_width,max_height,use_hough,use_ransac,use_mask,min_radius,max_radius,"
                 << "ring_band,min_arc_bins,dark_value_max,dark_offset,min_confidence,green_hue_min,"
                 << "green_hue_max,green_sat_min\n";
     }
@@ -176,6 +179,7 @@ void saveParams(const TuneState& state, const fs::path& params_dir) {
             << state.max_width << ','
             << state.max_height << ','
             << state.use_hough << ','
+            << state.use_ransac << ','
             << state.use_mask << ','
             << state.min_radius << ','
             << state.max_radius << ','
@@ -222,6 +226,7 @@ void updateTuneFromJson(const std::string& body, TuneState& tune) {
     parseIntField(body, "max_width", tune.max_width);
     parseIntField(body, "max_height", tune.max_height);
     parseIntField(body, "use_hough", tune.use_hough);
+    parseIntField(body, "use_ransac", tune.use_ransac);
     parseIntField(body, "use_mask", tune.use_mask);
     parseIntField(body, "min_radius", tune.min_radius);
     parseIntField(body, "max_radius", tune.max_radius);
@@ -431,7 +436,7 @@ std::string htmlPage() {
 <script>
 const spec = [
   ["scale_percent", 10, 100, 1], ["max_width", 64, 800, 1], ["max_height", 48, 600, 1],
-  ["use_hough", 0, 1, 1], ["use_mask", 0, 1, 1], ["min_radius", 1, 800, 1], ["max_radius", 2, 900, 1],
+  ["use_hough", 0, 1, 1], ["use_ransac", 0, 1, 1], ["use_mask", 0, 1, 1], ["min_radius", 1, 800, 1], ["max_radius", 2, 900, 1],
   ["ring_band", 1, 80, 1], ["min_arc_bins", 1, 72, 1], ["dark_value_max", 1, 255, 1],
   ["dark_offset", -80, 160, 1], ["min_confidence", 0, 100, 1],
   ["green_hue_min", 0, 179, 1], ["green_hue_max", 0, 179, 1], ["green_sat_min", 0, 255, 1]

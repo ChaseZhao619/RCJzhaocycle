@@ -23,6 +23,7 @@ struct ArcDetectorConfig {
     int processing_max_height = 300;
     bool return_binary_roi = false;
     bool use_hough = false;
+    bool use_ransac_candidates = true;
 
     int min_radius = 45;
     int max_radius = 430;
@@ -44,6 +45,8 @@ struct ArcDetectorConfig {
 
     float min_confidence = 0.18F;
     int max_candidates = 32;
+    int ransac_iterations = 900;
+    int ransac_max_points = 700;
     int roi_padding = 90;
 };
 
